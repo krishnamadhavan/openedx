@@ -1,0 +1,110 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "lms.fullname" . }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 600s
+  labels:
+    {{- include "lms.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.route.custom_host.enabled }}
+  host: {{ .Values.route.custom_host.lms.name }}
+  {{ end }}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: {{ include "caddy.fullname" . }}
+    weight: 100
+  wildcardPolicy: None
+  {{- if .Values.route.https_redirect }}
+  tls:
+    insecureEdgeTerminationPolicy: Redirect
+    termination: passthrough
+  {{ end }}
+
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "cms.fullname" . }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 600s
+  labels:
+    {{- include "cms.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.route.custom_host.enabled }}
+  host: {{ .Values.route.custom_host.cms.name }}
+  {{ end }}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: {{ include "caddy.fullname" . }}
+    weight: 100
+  wildcardPolicy: None
+  {{- if .Values.route.https_redirect }}
+  tls:
+    insecureEdgeTerminationPolicy: Redirect
+    termination: passthrough
+  {{ end }}
+
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: apps-{{ include "lms.fullname" . }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 600s
+  labels:
+    {{- include "lms.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.route.custom_host.enabled }}
+  host: {{ .Values.route.custom_host.apps.name }}
+  {{- else }}
+  host: apps.{{- include "lms.url" . -}}
+  {{ end }}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: {{ include "caddy.fullname" . }}
+    weight: 100
+  wildcardPolicy: None
+  {{- if .Values.route.https_redirect }}
+  tls:
+    insecureEdgeTerminationPolicy: Redirect
+    termination: passthrough
+  {{ end }}
+
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: preview-{{ include "lms.fullname" . }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 600s
+  labels:
+    {{- include "lms.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.route.custom_host.enabled }}
+  host: {{ .Values.route.custom_host.preview.name }}
+  {{- else }}
+  host: preview.{{- include "lms.url" . -}}
+  {{ end }}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: {{ include "caddy.fullname" . }}
+    weight: 100
+  wildcardPolicy: None
+  {{- if .Values.route.https_redirect }}
+  tls:
+    insecureEdgeTerminationPolicy: Redirect
+    termination: passthrough
+  {{ end }}

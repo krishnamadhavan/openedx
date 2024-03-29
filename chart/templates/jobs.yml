@@ -1,0 +1,264 @@
+{{ if .Values.jobs.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "forum.fullname" . }}-job
+  labels:
+    app.kubernetes.io/component: job
+    {{- include "forum.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "forum.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: {{ include "forum.name" . }}
+        image: "{{ .Values.forum.image.repository }}/{{ .Values.forum.image.name }}:{{ .Values.forum.image.tag }}"
+        imagePullPolicy: Always
+        args:
+          - sh
+          - '-e'
+          - '-c'
+          - |-
+            bundle exec rake search:initialize
+            bundle exec rake search:rebuild_indices
+        env:
+          - name: SEARCH_SERVER
+            value: {{- if .Values.elasticsearch.use_incluster_service }} "http://{{ .Release.Name }}-elasticsearch:9200" {{- else }} "https://{{ .Values.elasticsearch.managed.host }}:{{ .Values.elasticsearch.managed.port }}" {{- end }}
+          - name: MONGODB_AUTH
+            value: {{- if .Values.mongodb.use_incluster_service }} "" {{- else }} "{{ .Values.mongodb.managed.forum.auth }}" {{- end }}
+          - name: MONGODB_HOST
+            value: {{- if .Values.mongodb.use_incluster_service }} "{{ .Release.Name }}-mongodb" {{- else }} "{{ .Values.mongodb.managed.forum.host }}" {{- end }}
+          - name: MONGODB_PORT
+            value: {{- if .Values.mongodb.use_incluster_service }} "27017" {{- else }} "{{ .Values.mongodb.managed.forum.port | int }}" {{- end }}
+          - name: MONGODB_DATABASE
+            value: {{- if .Values.mongodb.use_incluster_service }} "cs_comments_service" {{- else }} "{{ .Values.mongodb.managed.forum.db }}" {{- end }}
+          - name: MONGOID_USE_SSL
+            value: {{- if .Values.mongodb.use_incluster_service }} "false" {{- else }} "{{ .Values.mongodb.managed.forum.use_ssl }}" {{- end }}
+          - name: MONGOID_AUTH_SOURCE
+            value: "admin"
+          - name: MONGOID_AUTH_MECH
+            value: {{- if .Values.mongodb.use_incluster_service }} "" {{- else }} "{{ .Values.mongodb.managed.forum.auth_mech }}" {{- end }}
+
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cms.fullname" . }}-job
+  labels:
+    app.kubernetes.io/component: job
+    {{- include "cms.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "cms.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+      - image: {{ include "openedx.image" . }}
+        imagePullPolicy: Always
+        name: {{ include "cms.name" . }}
+        args:
+          - sh
+          - '-e'
+          - '-c'
+          - |-
+            echo "Sleeping for 2 minutes to ensure mysql is up and ready"
+
+            sleep 120
+
+            dockerize -wait {{- if .Values.mysql.use_incluster_service }} tcp://{{ .Release.Name }}-mysql:3306 {{- else }} tcp://{{ .Values.mysql.managed.host }}:3306 {{- end }} -timeout 60s
+
+            echo "Loading settings $DJANGO_SETTINGS_MODULE"
+
+            # Fix incorrect uploaded file path
+            if [ -d /openedx/data/uploads/ ]; then
+              if [ -n "$(ls -A /openedx/data/uploads/)" ]; then
+                echo "Migrating CMS uploaded files to shared directory"
+                mv /openedx/data/uploads/* /openedx/media/
+                rm -rf /openedx/data/uploads/
+              fi
+            fi
+        env:
+        - name: SERVICE_VARIANT
+          value: cms
+        - name: DJANGO_SETTINGS_MODULE
+          value: cms.envs.tutor.production
+        volumeMounts:
+          - mountPath: /openedx/edx-platform/lms/envs/tutor/
+            name: settings-lms
+          - mountPath: /openedx/edx-platform/cms/envs/tutor/
+            name: settings-cms
+          - mountPath: /openedx/config
+            name: config
+          - mountPath: /openedx/data/logs
+            name: data-logs
+          - mountPath: /openedx/media/
+            name: media
+      volumes:
+      - name: settings-lms
+        configMap:
+          name: {{ include "openedx.fullname" . }}-settings-lms
+      - name: settings-cms
+        configMap:
+          name: {{ include "openedx.fullname" . }}-settings-cms
+      - name: config
+        configMap:
+          name: {{ include "openedx.fullname" . }}-config
+
+    {{- if .Values.openedx.logs.persistence.enabled }}
+      - name: data-logs
+        persistentVolumeClaim:
+          claimName: {{ include "openedx.fullname" . }}-logs
+    {{- else }}
+      - name: data-logs
+        emptyDir: {}
+    {{- end }}
+
+    {{- if .Values.openedx.media.persistence.enabled }}
+      - name: media
+        persistentVolumeClaim:
+          claimName: {{ include "openedx.fullname" . }}-media
+    {{- else }}
+      - name: media
+        emptyDir: { }
+    {{- end }}
+
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lms.fullname" . }}-job
+  labels:
+    app.kubernetes.io/component: job
+    {{- include "lms.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "lms.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+      - image: {{ include "openedx.image" . }}
+        imagePullPolicy: Always
+        name: {{ include "lms.name" . }}
+        args:
+          - sh
+          - '-e'
+          - '-c'
+          - >-
+            echo "Sleeping for 2 minutes to ensure mysql & mongodb are up and ready"
+
+            sleep 120
+
+            dockerize -wait {{- if .Values.mysql.use_incluster_service }} tcp://{{ .Release.Name }}-mysql:3306 {{- else }} tcp://{{ .Values.mysql.managed.host }}:3306 {{- end }} -timeout 60s
+
+            {{- if .Values.mongodb.use_incluster_service }}
+
+            dockerize -wait tcp://{{ .Release.Name }}-mongodb:27017 -timeout 60s
+
+            {{- else }}
+
+            echo "Application is using managed MongoDB, so we cannot wait for it to be ready"
+            
+            {{- end }}
+
+            echo "Loading settings $DJANGO_SETTINGS_MODULE"
+
+            # Fix incorrect uploaded file path
+
+            if [ -d /openedx/data/uploads/ ]; then
+              if [ -n "$(ls -A /openedx/data/uploads/)" ]; then
+                echo "Migrating LMS uploaded files to shared directory"
+                mv /openedx/data/uploads/* /openedx/media/
+                rm -rf /openedx/data/uploads/
+              fi
+            fi
+
+
+            # Create waffle switches to enable some features, if they have not been explicitly defined before
+
+            # Completion tracking: add green ticks to every completed unit
+
+            (./manage.py lms waffle_switch --list | grep
+            completion.enable_completion_tracking) || ./manage.py lms
+            waffle_switch --create completion.enable_completion_tracking on
+        env:
+        - name: SERVICE_VARIANT
+          value: lms
+        - name: DJANGO_SETTINGS_MODULE
+          value: lms.envs.tutor.production
+        volumeMounts:
+          - mountPath: /openedx/edx-platform/lms/envs/tutor/
+            name: settings-lms
+          - mountPath: /openedx/edx-platform/cms/envs/tutor/
+            name: settings-cms
+          - mountPath: /openedx/config
+            name: config
+          - mountPath: /openedx/data/logs
+            name: data-logs
+          - mountPath: /openedx/media/
+            name: media
+          - mountPath: /openedx/data/modulestore
+            name: modulestore
+          - mountPath: /openedx/data/ora2
+            name: ora2
+      volumes:
+      - name: settings-lms
+        configMap:
+          name: {{ include "openedx.fullname" . }}-settings-lms
+      - name: settings-cms
+        configMap:
+          name: {{ include "openedx.fullname" . }}-settings-cms
+      - name: config
+        configMap:
+          name: {{ include "openedx.fullname" . }}-config
+
+    {{- if .Values.openedx.logs.persistence.enabled }}
+      - name: data-logs
+        persistentVolumeClaim:
+          claimName: {{ include "openedx.fullname" . }}-logs
+    {{- else }}
+      - name: data-logs
+        emptyDir: {}
+    {{- end }}
+
+    {{- if .Values.openedx.media.persistence.enabled }}
+      - name: media
+        persistentVolumeClaim:
+          claimName: {{ include "openedx.fullname" . }}-media
+    {{- else }}
+      - name: media
+        emptyDir: {}
+    {{- end }}
+
+    {{- if .Values.openedx.modulestore.persistence.enabled }}
+      - name: modulestore
+        persistentVolumeClaim:
+          claimName: {{ include "openedx.fullname" . }}-modulestore
+    {{- else }}
+      - name: modulestore
+        emptyDir: {}
+    {{- end }}
+
+    {{- if .Values.openedx.ora2.persistence.enabled }}
+      - name: ora2
+        persistentVolumeClaim:
+          claimName: {{ include "openedx.fullname" . }}-ora2
+    {{- else }}
+      - name: ora2
+        emptyDir: {}
+    {{- end }}
+
+
+{{ end }}

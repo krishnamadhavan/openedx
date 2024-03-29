@@ -1,0 +1,97 @@
+{{ if and .Values.openedx.logs.persistence.enabled .Values.openedx.logs.persistence.enable_static_provisioning }}
+--- 
+apiVersion: "v1"
+kind: "PersistentVolume"
+metadata:
+  name: {{ include "openedx.fullname" . }}-logs-pv
+spec:
+  capacity:
+    storage: {{ .Values.openedx.logs.persistence.size }}
+  accessModes:
+    - "ReadWriteMany"
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  azureFile:
+    shareName: {{ .Values.openedx.logs.persistence.azure_file_share_name }}
+    secretName: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_name }}
+    secretNamespace: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_namespace }}
+    readOnly: false
+{{ end }}
+
+{{ if and .Values.openedx.media.persistence.enabled .Values.openedx.media.persistence.enable_static_provisioning }}
+---
+apiVersion: "v1"
+kind: "PersistentVolume"
+metadata:
+  name: {{ include "openedx.fullname" . }}-media-pv
+spec:
+  capacity:
+    storage: {{ .Values.openedx.media.persistence.size }}
+  accessModes:
+    - "ReadWriteMany"
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  azureFile:
+    shareName: {{ .Values.openedx.media.persistence.azure_file_share_name }}
+    secretName: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_name }}
+    secretNamespace: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_namespace }}
+    readOnly: false
+{{ end }}
+
+
+{{ if and .Values.openedx.data.persistence.enabled .Values.openedx.data.persistence.enable_static_provisioning }}
+---
+apiVersion: "v1"
+kind: "PersistentVolume"
+metadata:
+  name: {{ include "openedx.fullname" . }}-data-pv
+spec:
+  capacity:
+    storage: {{ .Values.openedx.data.persistence.size }}
+  accessModes:
+    - "ReadWriteMany"
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  azureFile:
+    shareName: {{ .Values.openedx.data.persistence.azure_file_share_name }}
+    secretName: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_name }}
+    secretNamespace: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_namespace }}
+    readOnly: false
+{{ end }}
+
+
+{{ if and .Values.openedx.modulestore.persistence.enabled .Values.openedx.modulestore.persistence.enable_static_provisioning }}
+---
+apiVersion: "v1"
+kind: "PersistentVolume"
+metadata:
+  name: {{ include "openedx.fullname" . }}-modulestore-pv
+spec:
+  capacity:
+    storage: {{ .Values.openedx.modulestore.persistence.size }}
+  accessModes:
+    - "ReadWriteMany"
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  azureFile:
+    shareName: {{ .Values.openedx.modulestore.persistence.azure_file_share_name }}
+    secretName: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_name }}
+    secretNamespace: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_namespace }}
+    readOnly: false
+{{ end }}
+
+
+{{ if and .Values.openedx.ora2.persistence.enabled .Values.openedx.ora2.persistence.enable_static_provisioning }}
+---
+apiVersion: "v1"
+kind: "PersistentVolume"
+metadata:
+  name: {{ include "openedx.fullname" . }}-ora2-pv
+spec:
+  capacity:
+    storage: {{ .Values.openedx.ora2.persistence.size }}
+  accessModes:
+    - "ReadWriteMany"
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  azureFile:
+    shareName: {{ .Values.openedx.ora2.persistence.azure_file_share_name }}
+    secretName: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_name }}
+    secretNamespace: {{ .Values.openedx.static_provisioning_settings.azure_file.secret_namespace }}
+    readOnly: false
+{{ end }}

@@ -1,0 +1,1293 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "caddy.fullname" . }}-config
+  labels:
+    {{- include "caddy.selectorLabels" . | nindent 4 }}
+data:
+  Caddyfile: |-
+    # Global configuration
+    {
+      {{- if eq .Values.caddy.letsencrypt.env "dev" }}
+      acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+      {{ end }}
+
+
+    }
+
+    # proxy directive snippet (with logging) to be used as follows:
+    #
+    #     import proxy "containername:port"
+    (proxy) {
+        log {
+            output stdout
+            format filter {
+                wrap json
+                fields {
+                    common_log delete
+                    request>headers delete
+                    resp_headers delete
+                    tls delete
+                }
+            }
+        }
+
+        # This will compress requests that matches the default criteria set by Caddy.
+        # see https://caddyserver.com/docs/caddyfile/directives/encode
+        # for information about the defaults; i.e. how/when this will be applied.
+        encode gzip
+
+        reverse_proxy {args.0} {
+            header_up X-Forwarded-Port 443
+        }
+    }
+
+    {{ include "lms.url" . -}}{$default_site_port}, preview.{{- include "lms.url" . -}}{$default_site_port} {
+
+        {{- include "robots.txt" . | nindent 4 }}
+
+        @favicon_matcher {
+            path_regexp ^/favicon.ico$
+        }
+        rewrite @favicon_matcher /theming/asset/images/favicon.ico
+
+        # Limit profile image upload size
+        handle_path /api/profile_images/*/*/upload {
+            request_body {
+                max_size 1MB
+            }
+        }
+
+        import proxy "{{ include "lms.fullname" . }}:8000"
+
+        handle_path /* {
+            request_body {
+                max_size 4MB
+            }
+        }
+    }
+
+    {{ include "cms.url" . -}}{$default_site_port} {
+        
+        {{- include "robots.txt" . | nindent 4 }}
+
+        @favicon_matcher {
+            path_regexp ^/favicon.ico$
+        }
+        rewrite @favicon_matcher /theming/asset/images/favicon.ico
+
+        import proxy "{{ include "cms.fullname" . }}:8000"
+
+        handle_path /* {
+            request_body {
+                max_size {{ .Values.openedx.env.max_asset_upload_file_size_in_mb | int }}MB
+            }
+        }
+    }
+
+    apps.{{ include "lms.url" . -}}{$default_site_port} {
+
+        {{- include "robots.txt" . | nindent 4 }}
+
+        respond / 204
+        request_body {
+            max_size 2MB
+        }
+        import proxy "{{ include "mfe.fullname" . }}:8002"
+    }
+
+
+{{- if .Values.redis.use_incluster_service }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "redis.fullname" . }}-config
+  labels:
+    {{- include "redis.selectorLabels" . | nindent 4 }}
+data:
+  redis.conf: |-
+    # https://raw.githubusercontent.com/redis/redis/6.0/redis.conf
+    port 6379
+
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    daemonize no
+    supervised no
+    pidfile /var/run/redis_6379.pid
+    loglevel notice
+    logfile ""
+    databases 16
+
+    ################################ SNAPSHOTTING  ################################
+    #
+    # Save the DB on disk:
+    #
+    #   save <seconds> <changes>
+
+    save 900 1
+    save 300 10
+    save 60 10000
+
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dir /openedx/redis/data/
+    dbfilename dump.rdb
+    rdb-del-sync-files no
+
+    ############################## APPEND ONLY MODE ###############################
+
+    # http://redis.io/topics/persistence
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    aof-load-truncated yes
+    aof-use-rdb-preamble yes
+{{- end }}
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mfe.fullname" . }}-caddy-config
+  labels:
+    {{- include "mfe.selectorLabels" . | nindent 4 }}
+data:
+  Caddyfile: |-
+    :8002 {
+        log {
+            output stdout
+            format filter {
+                wrap json
+                fields {
+                    common_log delete
+                    request>headers delete
+                    resp_headers delete
+                    tls delete
+                }
+            }
+        }
+
+        reverse_proxy /api/mfe_config/v1* {{ include "lms.fullname" . }}:8000 {
+            # We need to specify the host header, otherwise it will be rejected with 400
+            # from the lms.
+            header_up Host {{ include "lms.url" . }}
+        }
+
+        @mfe_authn {
+            path /authn /authn/*
+        }
+        handle @mfe_authn {
+            uri strip_prefix /authn
+            root * /openedx/dist/authn
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_account {
+            path /account /account/*
+        }
+        handle @mfe_account {
+            uri strip_prefix /account
+            root * /openedx/dist/account
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_communications {
+            path /communications /communications/*
+        }
+        handle @mfe_communications {
+            uri strip_prefix /communications
+            root * /openedx/dist/communications
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_course-authoring {
+            path /course-authoring /course-authoring/*
+        }
+        handle @mfe_course-authoring {
+            uri strip_prefix /course-authoring
+            root * /openedx/dist/course-authoring
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_discussions {
+            path /discussions /discussions/*
+        }
+        handle @mfe_discussions {
+            uri strip_prefix /discussions
+            root * /openedx/dist/discussions
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_gradebook {
+            path /gradebook /gradebook/*
+        }
+        handle @mfe_gradebook {
+            uri strip_prefix /gradebook
+            root * /openedx/dist/gradebook
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_learner-dashboard {
+            path /learner-dashboard /learner-dashboard/*
+        }
+        handle @mfe_learner-dashboard {
+            uri strip_prefix /learner-dashboard
+            root * /openedx/dist/learner-dashboard
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_learning {
+            path /learning /learning/*
+        }
+        handle @mfe_learning {
+            uri strip_prefix /learning
+            root * /openedx/dist/learning
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_ora-grading {
+            path /ora-grading /ora-grading/*
+        }
+        handle @mfe_ora-grading {
+            uri strip_prefix /ora-grading
+            root * /openedx/dist/ora-grading
+            try_files /{path} /index.html
+            file_server
+        }
+
+        @mfe_profile {
+            path /profile /profile/*
+        }
+        handle @mfe_profile {
+            uri strip_prefix /profile
+            root * /openedx/dist/profile
+            try_files /{path} /index.html
+            file_server
+        }
+    }
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openedx.fullname" . }}-settings-cms
+  labels:
+    {{- include "openedx.selectorLabels" . | nindent 4 }}
+data:
+  __init__.py: |-
+
+  production.py: |-
+    # -*- coding: utf-8 -*-
+    import os
+    from cms.envs.production import *
+
+    ####### Settings common to LMS and CMS
+    import json
+    import os
+
+    from xmodule.modulestore.modulestore_settings import update_module_store_settings
+    from openedx_plugin_app import settings as plugin_app_settings
+
+    # Mongodb connection parameters: simply modify `mongodb_parameters` to affect all connections to MongoDb.
+    {{- include "mongodb.contentstore.parameters" . | indent 4 }}
+
+    DOC_STORE_CONFIG = mongodb_parameters
+    CONTENTSTORE = {
+        "ENGINE": "xmodule.contentstore.mongo.MongoContentStore",
+        "ADDITIONAL_OPTIONS": {},
+        "DOC_STORE_CONFIG": DOC_STORE_CONFIG
+    }
+    # Load module store settings from config files
+    update_module_store_settings(MODULESTORE, doc_store_settings=DOC_STORE_CONFIG)
+    DATA_DIR = "/openedx/data/modulestore"
+
+    for store in MODULESTORE["default"]["OPTIONS"]["stores"]:
+        store["OPTIONS"]["fs_root"] = DATA_DIR
+
+    # Behave like memcache when it comes to connection errors
+    DJANGO_REDIS_IGNORE_EXCEPTIONS = True
+
+    # Elasticsearch's connection parameters
+    ELASTIC_SEARCH_CONFIG = [{
+        "host": {{- if .Values.elasticsearch.use_incluster_service }} "{{ .Release.Name }}-elasticsearch" {{- else }} "{{ .Values.elasticsearch.managed.host }}" {{- end }},
+        "port": {{- if .Values.elasticsearch.use_incluster_service }} 9200 {{- else }} {{ .Values.elasticsearch.managed.port }} {{- end }},
+        "http_auth": {{- if .Values.elasticsearch.use_incluster_service }} None {{- else }} {{ .Values.elasticsearch.managed.http_auth }} {{- end }},
+        "use_ssl": {{- if .Values.elasticsearch.use_incluster_service }} False {{- else }} True {{- end }},
+    }]
+
+    # Common cache config
+    CACHES = {
+        "default": {
+            "KEY_PREFIX": "default",
+            "VERSION": "1",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "general": {
+            "KEY_PREFIX": "general",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "mongo_metadata_inheritance": {
+            "KEY_PREFIX": "mongo_metadata_inheritance",
+            "TIMEOUT": 300,
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "configuration": {
+            "KEY_PREFIX": "configuration",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "celery": {
+            "KEY_PREFIX": "celery",
+            "TIMEOUT": 7200,
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "course_structure_cache": {
+            "KEY_PREFIX": "course_structure",
+            "TIMEOUT": 7200,
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "ora2-storage": {
+            "KEY_PREFIX": "ora2-storage",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        }
+    }
+
+    # The default Django contrib site is the one associated to the LMS domain name. 1 is
+    # usually "example.com", so it's the next available integer.
+    SITE_ID = 2
+
+    # Contact addresses
+    CONTACT_MAILING_ADDRESS = "WHOAcademy LXP - https://{{ include "lms.url" . }}"
+    DEFAULT_FROM_EMAIL = "{{ .Values.openedx.smtp.default_from_email }}"
+    DEFAULT_FEEDBACK_EMAIL = ENV_TOKENS.get("DEFAULT_FEEDBACK_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    SERVER_EMAIL = ENV_TOKENS.get("SERVER_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    TECH_SUPPORT_EMAIL = ENV_TOKENS.get("TECH_SUPPORT_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    CONTACT_EMAIL = ENV_TOKENS.get("CONTACT_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    BUGS_EMAIL = ENV_TOKENS.get("BUGS_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    UNIVERSITY_EMAIL = ENV_TOKENS.get("UNIVERSITY_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    PRESS_EMAIL = ENV_TOKENS.get("PRESS_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    PAYMENT_SUPPORT_EMAIL = ENV_TOKENS.get("PAYMENT_SUPPORT_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    BULK_EMAIL_DEFAULT_FROM_EMAIL = ENV_TOKENS.get("BULK_EMAIL_DEFAULT_FROM_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    API_ACCESS_MANAGER_EMAIL = ENV_TOKENS.get("API_ACCESS_MANAGER_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    API_ACCESS_FROM_EMAIL = ENV_TOKENS.get("API_ACCESS_FROM_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+
+    # Get rid completely of coursewarehistoryextended, as we do not use the CSMH database
+    INSTALLED_APPS.remove("lms.djangoapps.coursewarehistoryextended")
+    DATABASE_ROUTERS.remove(
+        "openedx.core.lib.django_courseware_routers.StudentModuleHistoryExtendedRouter"
+    )
+
+    # Set uploaded media file path
+    MEDIA_ROOT = "/openedx/media/"
+
+    # Video settings
+    VIDEO_IMAGE_SETTINGS["STORAGE_KWARGS"]["location"] = MEDIA_ROOT
+    VIDEO_TRANSCRIPTS_SETTINGS["STORAGE_KWARGS"]["location"] = MEDIA_ROOT
+
+    GRADES_DOWNLOAD = {
+        "STORAGE_TYPE": "",
+        "STORAGE_KWARGS": {
+            "base_url": "/media/grades/",
+            "location": "/openedx/media/grades",
+        },
+    }
+
+    ORA2_FILEUPLOAD_BACKEND = "filesystem"
+    ORA2_FILEUPLOAD_ROOT = "/openedx/data/ora2"
+    FILE_UPLOAD_STORAGE_BUCKET_NAME = "openedxuploads"
+    ORA2_FILEUPLOAD_CACHE_NAME = "ora2-storage"
+
+    # Change syslog-based loggers which don't work inside docker containers
+    LOGGING["handlers"]["local"] = {
+        "class": "logging.handlers.WatchedFileHandler",
+        "filename": os.path.join(LOG_DIR, "all.log"),
+        "formatter": "standard",
+    }
+    LOGGING["handlers"]["tracking"] = {
+        "level": "DEBUG",
+        "class": "logging.handlers.WatchedFileHandler",
+        "filename": os.path.join(LOG_DIR, "tracking.log"),
+        "formatter": "standard",
+    }
+    LOGGING["loggers"]["tracking"]["handlers"] = ["console", "local", "tracking"]
+    # Silence some loggers (note: we must attempt to get rid of these when upgrading from one release to the next)
+
+    import warnings
+    from django.utils.deprecation import RemovedInDjango50Warning, RemovedInDjango51Warning
+
+    warnings.filterwarnings("ignore", category=RemovedInDjango50Warning)
+    warnings.filterwarnings("ignore", category=RemovedInDjango51Warning)
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="wiki.plugins.links.wiki_plugin")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="boto.plugin")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="botocore.vendored.requests.packages.urllib3._collections")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="fs")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="fs.opener")
+
+    SILENCED_SYSTEM_CHECKS = ["2_0.W001", "fields.W903"]
+
+    # Email
+    EMAIL_USE_SSL = False
+    # Forward all emails from edX's Automated Communication Engine (ACE) to django.
+    ACE_ENABLED_CHANNELS = ["django_email"]
+    ACE_CHANNEL_DEFAULT_EMAIL = "django_email"
+    ACE_CHANNEL_TRANSACTIONAL_EMAIL = "django_email"
+    EMAIL_FILE_PATH = "/tmp/openedx/emails"
+
+    # Language/locales
+    LOCALE_PATHS.append("/openedx/locale/contrib/locale")
+    LOCALE_PATHS.append("/openedx/locale/user/locale")
+    LANGUAGE_COOKIE_NAME = "openedx-language-preference"
+
+    # Allow the platform to include itself in an iframe
+    X_FRAME_OPTIONS = "SAMEORIGIN"
+
+    JWT_AUTH["JWT_ISSUER"] = "https://{{ include "lms.url" . }}/oauth2"
+    JWT_AUTH["JWT_AUDIENCE"] = "openedx"
+    JWT_AUTH["JWT_SECRET_KEY"] = "{{ .Values.openedx.env.secret_key }}"
+    JWT_AUTH["JWT_PRIVATE_SIGNING_JWK"] = json.dumps(
+        {
+            "kid": "openedx",
+            "kty": "RSA",
+            "e": "AQAB",
+            "d": "QOzWpz04_R96jRXtrLXdKZdXrj2KteWtLQTm1kxR0whiADVIya8ITmBb9nkAIilVIiuCxxZdKS65zIJLNoRuDMJSRTP-3sNREkRtROJzpr8DKPbfRYwtHVQT3hAsh9ckvSyMsBXxYvvacfryFZrEf5cM7VJP2JddzNHe4oQima_N-oPSMR44tLfjdcpBMrM8EpNFQK6M-aExDAf-YtR2krcZrngZYZMaCcRte3gswQ1i8OLm1NoFZFL798YyOEfTpVN6m81G3453bfez2tJomtNqy4P3Lq-QxzE97aOHJnnqY2BQVgvjO__-Klz8OkN6xY5zIa68uX20q09rzFGOkw",
+            "n": "uf-rtr7VpGNvcne2qhobJz7GulMfZmF-Ho_rcfuafqU9WPN438OBANoyVUV40f7RLcsReDGCeIgnppD-FCZvQh-UeePhCHqZ_PY1bVKb3SNEEOuhWvHeQUmkNKm-l3ANNVfFdVKqAW9g5Cr-pYGU8buNqM5dxochRBLonym8gguKYOh2xmQ-t4Y0IUlmaFfV6VNrlL7MV8uq1av-Y3C8Or7HxCkFsGZEveofPhfajChZFUomgEt9lm_Oqvt6DCtnmPGoFsF7RDjx40mJxBfukjBItOqIpiRM6adfFPXLqDAw9mmCnRFVjEjHPZNjsXcYg3pwMg2PBOxXTZgydcsSaQ",
+            "p": "zYq0-TqnN_CBzGdeZ93HfUnSiOrmmkztUI3sb-sGN0feQzKk0_-0aIiGUofDPAjxl4EIwxX16eFDVETffEc7h1tQf2VMW_aAovI0LtG85VR4EU4NptThXG8iogyzzGOxaSY4En5YfglPAQGImm-XR6FujMHX4mkBchbJkd8oxcM",
+            "q": "56jGg8kGNXh1a__AAB0xq9rNxZXdtH50H-hzBoTIhsJ1k6cIWaqaCjbZwCV799l8U-XTLRDVibMTsBaN1_71mFniWw2RZ4SVUkQcKqumo90Pq0N-BI_zaKJKFmgdxplEr7pdHigWBD87NvVSamoz3hk9wFUI8l-yUHVSbZW9iGM",
+            "dq": "5cLXYU24AsB-dacq3vIVmcVh4V5KjgH9WshJjWWVHVMxGkjIV2aFcSwFvDVxRtlGHlALqt7Pa8tY84TrGhedroU3o-dJF8q_7t_ur8Ofe1Z9e_dsvUmouVZ89Mw-_AJ3xXKpeId5jqzIJjIak8DRwK54OJIeVYXkbThvkJC7ctE",
+            "dp": "bvFFiZjdFVad2OSaklmlCb1FBF42JmcLWQWh7y7eZgxGreKyETPd_uZiCj35ZXg2Xt5pClPaLmlGXD_omT4hpYfmRT06IBFHkaxF-ld_LBGR1VVaDQius6PQ_8L3cYUGB4l3jpPf0_fWSua3AxTkhOdfsl4W1sBy5U_jcPcRHN0",
+            "qi": "E24b_zRJS-e3pNyTb__n2Jf0kRZp5GU04LrFMTJ3r-mhS_8LrI97Dfme4HfIIgLK_nEhX94lzd2HlpV5ha56YwZv04Q_PJt2zQ1Qnt8Ny19PrAHc1ypIx4i0uFOxc27Wvr2UyVQ7TFFpqxdZcDLPs4Rr-GZb1P_bVM9Zegigo-Y",
+        }
+    )
+    JWT_AUTH["JWT_PUBLIC_SIGNING_JWK_SET"] = json.dumps(
+        {
+            "keys": [
+                {
+                    "kid": "openedx",
+                    "kty": "RSA",
+                    "e": "AQAB",
+                    "n": "uf-rtr7VpGNvcne2qhobJz7GulMfZmF-Ho_rcfuafqU9WPN438OBANoyVUV40f7RLcsReDGCeIgnppD-FCZvQh-UeePhCHqZ_PY1bVKb3SNEEOuhWvHeQUmkNKm-l3ANNVfFdVKqAW9g5Cr-pYGU8buNqM5dxochRBLonym8gguKYOh2xmQ-t4Y0IUlmaFfV6VNrlL7MV8uq1av-Y3C8Or7HxCkFsGZEveofPhfajChZFUomgEt9lm_Oqvt6DCtnmPGoFsF7RDjx40mJxBfukjBItOqIpiRM6adfFPXLqDAw9mmCnRFVjEjHPZNjsXcYg3pwMg2PBOxXTZgydcsSaQ",
+                }
+            ]
+        }
+    )
+    JWT_AUTH["JWT_ISSUERS"] = [
+        {
+            "ISSUER": "https://{{ include "lms.url" . }}/oauth2",
+            "AUDIENCE": "openedx",
+            "SECRET_KEY": "{{ .Values.openedx.env.secret_key }}"
+        }
+    ]
+
+    # Enable/Disable some features globally
+    FEATURES["ENABLE_DISCUSSION_SERVICE"] = True
+    FEATURES["PREVENT_CONCURRENT_LOGINS"] = False
+    FEATURES["ENABLE_CORS_HEADERS"] = True
+    FEATURES["ENABLE_SPECIAL_EXAMS"] = True
+    FEATURES['ENABLE_V2_CERT_DISPLAY_SETTINGS'] = True
+
+    # CORS
+    CORS_ALLOW_CREDENTIALS = True
+    CORS_ORIGIN_ALLOW_ALL = False
+    CORS_ALLOW_INSECURE = False
+    CORS_ALLOW_HEADERS = corsheaders_default_headers + ('use-jwt-cookie',)
+
+    # Add your MFE and third-party app domains here
+    CORS_ORIGIN_WHITELIST = [
+        {{- range .Values.openedx.env.cors_origin_whitelist }}
+            {{ . | quote }},
+        {{- end }}
+    ]
+
+    # Disable codejail support
+    # explicitely configuring python is necessary to prevent unsafe calls
+    import codejail.jail_code
+
+    codejail.jail_code.configure("python", "nonexistingpythonbinary", user=None)
+    # another configuration entry is required to override prod/dev settings
+    CODE_JAIL = {
+        "python_bin": "nonexistingpythonbinary",
+        "user": None,
+    }
+
+    ######## End of settings common to LMS and CMS
+
+    ######## Common CMS settings
+    STUDIO_NAME = "WHOAcademy LXP - Studio"
+
+    CACHES["staticfiles"] = {
+        "KEY_PREFIX": "staticfiles_cms",
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "staticfiles_cms",
+    }
+
+    # Authentication
+    SOCIAL_AUTH_EDX_OAUTH2_SECRET = "4VeiJgZisySpkYfZG2CxHAOl"
+    SOCIAL_AUTH_EDX_OAUTH2_URL_ROOT = "http://{{ include "lms.fullname" . }}:8000"
+    SOCIAL_AUTH_REDIRECT_IS_HTTPS = False  # scheme is correctly included in redirect_uri
+    SESSION_COOKIE_NAME = "studio_session_id"
+
+    MAX_ASSET_UPLOAD_FILE_SIZE_IN_MB = {{ .Values.openedx.env.max_asset_upload_file_size_in_mb }}
+
+    FRONTEND_LOGIN_URL = LMS_ROOT_URL + '/login'
+    FRONTEND_REGISTER_URL = LMS_ROOT_URL + '/register'
+
+    # Create folders if necessary
+    for folder in [LOG_DIR, MEDIA_ROOT, STATIC_ROOT_BASE, ORA2_FILEUPLOAD_ROOT]:
+        if not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+
+    ######## End of common CMS settings
+
+    ALLOWED_HOSTS = [
+        ENV_TOKENS.get("CMS_BASE"),
+        "{{ include "cms.fullname" . }}",
+    ]
+    CORS_ORIGIN_WHITELIST.append("https://{{ include "cms.url" . }}")
+
+    # Authentication
+    SOCIAL_AUTH_EDX_OAUTH2_KEY = "cms-sso"
+    SOCIAL_AUTH_EDX_OAUTH2_PUBLIC_URL_ROOT = "https://{{ include "lms.url" . }}"
+
+    COURSE_AUTHORING_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/course-authoring"
+
+    LOGIN_REDIRECT_WHITELIST.append("apps.{{ include "lms.url" . }}")
+    CORS_ORIGIN_WHITELIST.append("https://apps.{{ include "lms.url" . }}")
+    CSRF_TRUSTED_ORIGINS.append("https://apps.{{ include "lms.url" . }}")
+    {{- range .Values.openedx.env.csrf_trusted_origins }}
+    CSRF_TRUSTED_ORIGINS.append({{ . | quote }})
+    {{- end }}
+
+    FILE_UPLOAD_PERMISSIONS = None
+    LOGOUT_URL = "https://{{ include "lms.url" . }}/logout"
+
+    # Configuration variables added for core changes in edX, plugins & Xblocks
+    ANALYTICS_DASHBOARD_URL = "{{ .Values.openedx.env.analytics_dashboard_url }}"
+
+    # Custom Keycloak OAuth Backend configuration
+    AUTHORIZATION_URL = "{{ .Values.openedx.env.keycloak.authorization_url }}"
+    ACCESS_TOKEN_URL = "{{ .Values.openedx.env.keycloak.access_token_url }}"
+    USER_DETAILS_URL = "{{ .Values.openedx.env.keycloak.user_details_url }}"
+    SSO_LOGOUT_URL = "{{ .Values.openedx.env.keycloak.logout_url }}"
+    KEYCLOAK_BASE_URL = "{{ .Values.openedx.env.keycloak.base_url }}"
+    KEYCLOAK_PUBLIC_KEY = "{{ .Values.openedx.env.keycloak.public_key }}"
+    KEYCLOAK_MASTER_REALM_CLIENT_ID = "{{ .Values.openedx.env.keycloak.realm.master.client_id }}"
+    KEYCLOAK_MASTER_REALM_CLIENT_SECRET = "{{ .Values.openedx.env.keycloak.realm.master.client_secret }}"
+
+    # Badgr configuration for enabling Open Badges
+    BADGR_BASE_URL = "{{ .Values.openedx.env.badgr.base_url }}"
+    BADGR_API_TOKEN = "{{ .Values.openedx.env.badgr.api_token }}"
+    BADGR_ISSUER_SLUG = "{{ .Values.openedx.env.badgr.issuer_slug }}"
+
+    # Custom application variables
+    USER_FEEDBACK_URL = "{{ .Values.openedx.env.user_feedback_url }}"
+
+    LEARNING_SPACES = [
+    {{- range $index, $element := .Values.openedx.env.learning_spaces }}
+        {{ $element| toJson }},
+    {{- end }}
+    ]
+    LEARNING_SPACES_FRONTEND_URL = "{{ .Values.openedx.env.learning_spaces_frontend_url }}"
+
+    FACE_TO_FACE_FRONTEND_URL = "{{ .Values.openedx.env.face_to_face_frontend_url }}"
+
+    LEARNING_EXPERIENCE_PLATFORM_URL = "{{ .Values.openedx.env.learning_experience_platform_frontend_url }}"
+
+    DIGITAL_CREDENTIALS_URL = "{{ .Values.openedx.env.openedx_extension.route_url }}"
+    OPENEDX_EXTENSION_URL = "{{ .Values.openedx.env.openedx_extension.service_url }}"
+
+    KEYCLOAK_PROXY_SERVICE = "{{ .Values.openedx.env.keycloak_openedx_proxy_url }}"
+
+    LEARNING_DELIVERY_API_URL = "{{ .Values.openedx.env.learning_delivery_api_url }}"
+    ANTI_CORRUPTION_LAYER_DOMAIN = "{{ .Values.openedx.env.learning_delivery_api_url }}"
+
+    API_GATEWAY_URL = "{{ .Values.openedx.env.api_gateway_url }}"
+
+    LRS_ENDPOINT = "{{ .Values.openedx.env.lrs.endpoint }}"
+    LRS_AUTH = "{{ .Values.openedx.env.lrs.auth }}"
+
+    UNITY_XBLOCK_AZURE_CONNECTION_STRING = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_connection_string }}"
+    UNITY_XBLOCK_AZURE_ACCOUNT_NAME = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_account_name }}"
+    UNITY_XBLOCK_AZURE_ACCOUNT_KEY = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_account_key }}"
+    UNITY_XBLOCK_AZURE_CONTAINER = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_container }}"
+    UNITY_XBLOCK_AZURE_LOCATION = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_location }}"
+    ENABLE_UNITY_XBLOCK_AZURE_STORAGE = "{{ .Values.openedx.env.unity_xblock.enable_unity_xblock_azure_storage }}"
+    UNITY_XAPI_ENDPOINT = "{{ .Values.openedx.env.unity_xblock.unity_xapi_endpoint }}"
+    UNITY_LRS_KEY = "{{ .Values.openedx.env.unity_xblock.unity_lrs_key }}"
+    UNITY_LRS_SECRET = "{{ .Values.openedx.env.unity_xblock.unity_lrs_secret }}"
+
+    FERNET_SECRET_KEY = "{{ .Values.openedx.env.fernet_secret_key }}"
+
+    AZURE_LOGGING_ENV = "{{ .Values.openedx.env.logging.env }}"
+    AZURE_ACCOUNT_NAME = "{{ .Values.openedx.env.logging.azure_account_name }}"
+    AZURE_ACCOUNT_KEY = "{{ .Values.openedx.env.logging.azure_account_key }}"
+    AZURE_LOGGING_INTERVAL = "{{ .Values.openedx.env.logging.interval }}"
+
+    PLAYER_ENDPOINT = "{{ .Values.openedx.env.cmi5.player.endpoint }}"
+    PLAYER_AUTH = "{{ .Values.openedx.env.cmi5.player.auth }}"
+    PLAYER_TENANT_CODE = "{{ .Values.openedx.env.cmi5.player.tenant_code }}"
+
+    AUTHENTICATION_BACKENDS.append('common.djangoapps.third_party_auth.keycloak.KeycloakOAuth2')
+
+    INSTALLED_APPS.append('cmi5')
+
+    FILE_UPLOAD_HANDLERS = ('clamav_upload.handlers.ClamAVFileUploadHandler',)
+
+    CLAMAV_UPLOAD = {
+        "CLAMD_TCP_ADDR": "{{ .Release.Name }}-clamav",
+        "CLAMD_TCP_SOCKET": 3310
+    }
+
+    LAP_WHOA_DASHBOARD_LINK = "{{ .Values.openedx.env.lap.whoa_dashboard_link }}"
+    LAP_IARC_DASHBOARD_LINK = "{{ .Values.openedx.env.lap.iarc_dashboard_link }}"
+    LAP_COMMON_DASHBOARD_WITH_COURSE_NAME_FILTER_LINK = '{{ .Values.openedx.env.lap.common_dashboard_with_course_name_filter_link }}'
+
+    OPENEDX_EXTENSION_FRONTEND_URL = "{{ .Values.openedx.env.openedx_extension_frontend_url }}"
+    OPENEDX_EXTENSION_API_BASE_URL = "{{ .Values.openedx.env.openedx_extension_api_url }}"
+    TAGS_CACHE_TIMEOUT = "{{ .Values.openedx.env.tags_config.cache_timeout }}"
+    
+    # check DEFAULT_THROTTLE_RATES is exists with walrus operator (:=) shorthand, then update the REST_FRAMEWORK settings
+    if DEFAULT_THROTTLE_RATES := plugin_app_settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES'):
+        REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'].update(DEFAULT_THROTTLE_RATES)
+
+    AZURE_CUSTOM_DOMAIN = "{{ .Values.openedx.env.discussion.azure_custom_domain }}"
+    AZURE_LOCATION = "{{ .Values.openedx.env.discussion.azure_location }}"
+    AZURE_CONTAINER_DISCUSSION = "{{ .Values.openedx.env.discussion.azure_container_discussion }}"
+    DISCUSSION_IMAGES_FOLDER_NAME = 'discussion-forum'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openedx.fullname" . }}-settings-lms
+  labels:
+    {{- include "openedx.selectorLabels" . | nindent 4 }}
+data:
+  __init__.py: |-
+
+  production.py: |-
+    # -*- coding: utf-8 -*-
+    import os
+    from lms.envs.production import *
+
+    ####### Settings common to LMS and CMS
+    import json
+    import os
+
+    from xmodule.modulestore.modulestore_settings import update_module_store_settings
+    from openedx_plugin_app import settings as plugin_app_settings
+
+    # Mongodb connection parameters: simply modify `mongodb_parameters` to affect all connections to MongoDb.
+    {{- include "mongodb.contentstore.parameters" . | indent 4 }}
+
+    DOC_STORE_CONFIG = mongodb_parameters
+    CONTENTSTORE = {
+        "ENGINE": "xmodule.contentstore.mongo.MongoContentStore",
+        "ADDITIONAL_OPTIONS": {},
+        "DOC_STORE_CONFIG": DOC_STORE_CONFIG
+    }
+    # Load module store settings from config files
+    update_module_store_settings(MODULESTORE, doc_store_settings=DOC_STORE_CONFIG)
+    DATA_DIR = "/openedx/data/modulestore"
+
+    for store in MODULESTORE["default"]["OPTIONS"]["stores"]:
+        store["OPTIONS"]["fs_root"] = DATA_DIR
+
+    # Behave like memcache when it comes to connection errors
+    DJANGO_REDIS_IGNORE_EXCEPTIONS = True
+
+    # Elasticsearch's connection parameters
+    ELASTIC_SEARCH_CONFIG = [{
+        "host": {{- if .Values.elasticsearch.use_incluster_service }} "{{ .Release.Name }}-elasticsearch" {{- else }} "{{ .Values.elasticsearch.managed.host }}" {{- end }},
+        "port": {{- if .Values.elasticsearch.use_incluster_service }} 9200 {{- else }} {{ .Values.elasticsearch.managed.port }} {{- end }},
+        "http_auth": {{- if .Values.elasticsearch.use_incluster_service }} None {{- else }} {{ .Values.elasticsearch.managed.http_auth }} {{- end }},
+        "use_ssl": {{- if .Values.elasticsearch.use_incluster_service }} False {{- else }} True {{- end }},
+    }]
+
+    # Common cache config
+    CACHES = {
+        "default": {
+            "KEY_PREFIX": "default",
+            "VERSION": "1",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "general": {
+            "KEY_PREFIX": "general",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "mongo_metadata_inheritance": {
+            "KEY_PREFIX": "mongo_metadata_inheritance",
+            "TIMEOUT": 300,
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "configuration": {
+            "KEY_PREFIX": "configuration",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "celery": {
+            "KEY_PREFIX": "celery",
+            "TIMEOUT": 7200,
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "course_structure_cache": {
+            "KEY_PREFIX": "course_structure",
+            "TIMEOUT": 7200,
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        },
+        "ora2-storage": {
+            "KEY_PREFIX": "ora2-storage",
+            "BACKEND": "django_redis.cache.RedisCache",
+            {{- include "redis.connection.string" . | indent 12 -}}
+        }
+    }
+
+    # The default Django contrib site is the one associated to the LMS domain name. 1 is
+    # usually "example.com", so it's the next available integer.
+    SITE_ID = 2
+
+    # Contact addresses
+    CONTACT_MAILING_ADDRESS = "WHOAcademy LXP - https://{{ include "lms.url" . }}"
+    DEFAULT_FROM_EMAIL = "{{ .Values.openedx.smtp.default_from_email }}"
+    DEFAULT_FEEDBACK_EMAIL = ENV_TOKENS.get("DEFAULT_FEEDBACK_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    SERVER_EMAIL = ENV_TOKENS.get("SERVER_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    TECH_SUPPORT_EMAIL = ENV_TOKENS.get("TECH_SUPPORT_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    CONTACT_EMAIL = ENV_TOKENS.get("CONTACT_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    BUGS_EMAIL = ENV_TOKENS.get("BUGS_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    UNIVERSITY_EMAIL = ENV_TOKENS.get("UNIVERSITY_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    PRESS_EMAIL = ENV_TOKENS.get("PRESS_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    PAYMENT_SUPPORT_EMAIL = ENV_TOKENS.get("PAYMENT_SUPPORT_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    BULK_EMAIL_DEFAULT_FROM_EMAIL = ENV_TOKENS.get("BULK_EMAIL_DEFAULT_FROM_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    API_ACCESS_MANAGER_EMAIL = ENV_TOKENS.get("API_ACCESS_MANAGER_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+    API_ACCESS_FROM_EMAIL = ENV_TOKENS.get("API_ACCESS_FROM_EMAIL", ENV_TOKENS["CONTACT_EMAIL"])
+
+    # Get rid completely of coursewarehistoryextended, as we do not use the CSMH database
+    INSTALLED_APPS.remove("lms.djangoapps.coursewarehistoryextended")
+    DATABASE_ROUTERS.remove(
+        "openedx.core.lib.django_courseware_routers.StudentModuleHistoryExtendedRouter"
+    )
+
+    # Set uploaded media file path
+    MEDIA_ROOT = "/openedx/media/"
+
+    # Video settings
+    VIDEO_IMAGE_SETTINGS["STORAGE_KWARGS"]["location"] = MEDIA_ROOT
+    VIDEO_TRANSCRIPTS_SETTINGS["STORAGE_KWARGS"]["location"] = MEDIA_ROOT
+
+    GRADES_DOWNLOAD = {
+        "STORAGE_TYPE": "",
+        "STORAGE_KWARGS": {
+            "base_url": "/media/grades/",
+            "location": "/openedx/media/grades",
+        },
+    }
+
+    ORA2_FILEUPLOAD_BACKEND = "filesystem"
+    ORA2_FILEUPLOAD_ROOT = "/openedx/data/ora2"
+    FILE_UPLOAD_STORAGE_BUCKET_NAME = "openedxuploads"
+    ORA2_FILEUPLOAD_CACHE_NAME = "ora2-storage"
+
+    # Change syslog-based loggers which don't work inside docker containers
+    LOGGING["handlers"]["local"] = {
+        "class": "logging.handlers.WatchedFileHandler",
+        "filename": os.path.join(LOG_DIR, "all.log"),
+        "formatter": "standard",
+    }
+    LOGGING["handlers"]["tracking"] = {
+        "level": "DEBUG",
+        "class": "logging.handlers.WatchedFileHandler",
+        "filename": os.path.join(LOG_DIR, "tracking.log"),
+        "formatter": "standard",
+    }
+    LOGGING["loggers"]["tracking"]["handlers"] = ["console", "local", "tracking"]
+    # Silence some loggers (note: we must attempt to get rid of these when upgrading from one release to the next)
+    LOGGING["loggers"]["blockstore.apps.bundles.storage"] = {"handlers": ["console"], "level": "WARNING"}
+
+    import warnings
+    from django.utils.deprecation import RemovedInDjango50Warning, RemovedInDjango51Warning
+
+    warnings.filterwarnings("ignore", category=RemovedInDjango50Warning)
+    warnings.filterwarnings("ignore", category=RemovedInDjango51Warning)
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="wiki.plugins.links.wiki_plugin")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="boto.plugin")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="botocore.vendored.requests.packages.urllib3._collections")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="fs")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="fs.opener")
+
+    SILENCED_SYSTEM_CHECKS = ["2_0.W001", "fields.W903"]
+
+    # Email
+    EMAIL_USE_SSL = False
+    # Forward all emails from edX's Automated Communication Engine (ACE) to django.
+    ACE_ENABLED_CHANNELS = ["django_email"]
+    ACE_CHANNEL_DEFAULT_EMAIL = "django_email"
+    ACE_CHANNEL_TRANSACTIONAL_EMAIL = "django_email"
+    EMAIL_FILE_PATH = "/tmp/openedx/emails"
+
+    # Language/locales
+    LOCALE_PATHS.append("/openedx/locale/contrib/locale")
+    LOCALE_PATHS.append("/openedx/locale/user/locale")
+    LANGUAGE_COOKIE_NAME = "openedx-language-preference"
+
+    # Allow the platform to include itself in an iframe
+    X_FRAME_OPTIONS = "SAMEORIGIN"
+
+    JWT_AUTH["JWT_ISSUER"] = "https://{{ include "lms.url" . }}/oauth2"
+    JWT_AUTH["JWT_AUDIENCE"] = "openedx"
+    JWT_AUTH["JWT_SECRET_KEY"] = "{{ .Values.openedx.env.secret_key }}"
+    JWT_AUTH["JWT_PRIVATE_SIGNING_JWK"] = json.dumps(
+        {
+            "kid": "openedx",
+            "kty": "RSA",
+            "e": "AQAB",
+            "d": "QOzWpz04_R96jRXtrLXdKZdXrj2KteWtLQTm1kxR0whiADVIya8ITmBb9nkAIilVIiuCxxZdKS65zIJLNoRuDMJSRTP-3sNREkRtROJzpr8DKPbfRYwtHVQT3hAsh9ckvSyMsBXxYvvacfryFZrEf5cM7VJP2JddzNHe4oQima_N-oPSMR44tLfjdcpBMrM8EpNFQK6M-aExDAf-YtR2krcZrngZYZMaCcRte3gswQ1i8OLm1NoFZFL798YyOEfTpVN6m81G3453bfez2tJomtNqy4P3Lq-QxzE97aOHJnnqY2BQVgvjO__-Klz8OkN6xY5zIa68uX20q09rzFGOkw",
+            "n": "uf-rtr7VpGNvcne2qhobJz7GulMfZmF-Ho_rcfuafqU9WPN438OBANoyVUV40f7RLcsReDGCeIgnppD-FCZvQh-UeePhCHqZ_PY1bVKb3SNEEOuhWvHeQUmkNKm-l3ANNVfFdVKqAW9g5Cr-pYGU8buNqM5dxochRBLonym8gguKYOh2xmQ-t4Y0IUlmaFfV6VNrlL7MV8uq1av-Y3C8Or7HxCkFsGZEveofPhfajChZFUomgEt9lm_Oqvt6DCtnmPGoFsF7RDjx40mJxBfukjBItOqIpiRM6adfFPXLqDAw9mmCnRFVjEjHPZNjsXcYg3pwMg2PBOxXTZgydcsSaQ",
+            "p": "zYq0-TqnN_CBzGdeZ93HfUnSiOrmmkztUI3sb-sGN0feQzKk0_-0aIiGUofDPAjxl4EIwxX16eFDVETffEc7h1tQf2VMW_aAovI0LtG85VR4EU4NptThXG8iogyzzGOxaSY4En5YfglPAQGImm-XR6FujMHX4mkBchbJkd8oxcM",
+            "q": "56jGg8kGNXh1a__AAB0xq9rNxZXdtH50H-hzBoTIhsJ1k6cIWaqaCjbZwCV799l8U-XTLRDVibMTsBaN1_71mFniWw2RZ4SVUkQcKqumo90Pq0N-BI_zaKJKFmgdxplEr7pdHigWBD87NvVSamoz3hk9wFUI8l-yUHVSbZW9iGM",
+            "dq": "5cLXYU24AsB-dacq3vIVmcVh4V5KjgH9WshJjWWVHVMxGkjIV2aFcSwFvDVxRtlGHlALqt7Pa8tY84TrGhedroU3o-dJF8q_7t_ur8Ofe1Z9e_dsvUmouVZ89Mw-_AJ3xXKpeId5jqzIJjIak8DRwK54OJIeVYXkbThvkJC7ctE",
+            "dp": "bvFFiZjdFVad2OSaklmlCb1FBF42JmcLWQWh7y7eZgxGreKyETPd_uZiCj35ZXg2Xt5pClPaLmlGXD_omT4hpYfmRT06IBFHkaxF-ld_LBGR1VVaDQius6PQ_8L3cYUGB4l3jpPf0_fWSua3AxTkhOdfsl4W1sBy5U_jcPcRHN0",
+            "qi": "E24b_zRJS-e3pNyTb__n2Jf0kRZp5GU04LrFMTJ3r-mhS_8LrI97Dfme4HfIIgLK_nEhX94lzd2HlpV5ha56YwZv04Q_PJt2zQ1Qnt8Ny19PrAHc1ypIx4i0uFOxc27Wvr2UyVQ7TFFpqxdZcDLPs4Rr-GZb1P_bVM9Zegigo-Y",
+        }
+    )
+    JWT_AUTH["JWT_PUBLIC_SIGNING_JWK_SET"] = json.dumps(
+        {
+            "keys": [
+                {
+                    "kid": "openedx",
+                    "kty": "RSA",
+                    "e": "AQAB",
+                    "n": "uf-rtr7VpGNvcne2qhobJz7GulMfZmF-Ho_rcfuafqU9WPN438OBANoyVUV40f7RLcsReDGCeIgnppD-FCZvQh-UeePhCHqZ_PY1bVKb3SNEEOuhWvHeQUmkNKm-l3ANNVfFdVKqAW9g5Cr-pYGU8buNqM5dxochRBLonym8gguKYOh2xmQ-t4Y0IUlmaFfV6VNrlL7MV8uq1av-Y3C8Or7HxCkFsGZEveofPhfajChZFUomgEt9lm_Oqvt6DCtnmPGoFsF7RDjx40mJxBfukjBItOqIpiRM6adfFPXLqDAw9mmCnRFVjEjHPZNjsXcYg3pwMg2PBOxXTZgydcsSaQ",
+                }
+            ]
+        }
+    )
+    JWT_AUTH["JWT_ISSUERS"] = [
+        {
+            "ISSUER": "https://{{ include "lms.url" . }}/oauth2",
+            "AUDIENCE": "openedx",
+            "SECRET_KEY": "{{ .Values.openedx.env.secret_key }}"
+        }
+    ]
+
+    # Enable/Disable some features globally
+    FEATURES["ENABLE_DISCUSSION_SERVICE"] = True
+    FEATURES["PREVENT_CONCURRENT_LOGINS"] = False
+    FEATURES["ENABLE_CORS_HEADERS"] = True
+    FEATURES["ENABLE_SPECIAL_EXAMS"] = True
+    FEATURES['ENABLE_V2_CERT_DISPLAY_SETTINGS'] = True
+
+    # CORS
+    CORS_ALLOW_CREDENTIALS = True
+    CORS_ORIGIN_ALLOW_ALL = False
+    CORS_ALLOW_INSECURE = False
+    CORS_ALLOW_HEADERS = corsheaders_default_headers + ('use-jwt-cookie',)
+
+    # Add your MFE and third-party app domains here
+    CORS_ORIGIN_WHITELIST = [
+        {{- range .Values.openedx.env.cors_origin_whitelist }}
+            {{ . | quote }},
+        {{- end }}
+    ]
+
+    # Disable codejail support
+    # explicitely configuring python is necessary to prevent unsafe calls
+    import codejail.jail_code
+
+    codejail.jail_code.configure("python", "nonexistingpythonbinary", user=None)
+    # another configuration entry is required to override prod/dev settings
+    CODE_JAIL = {
+        "python_bin": "nonexistingpythonbinary",
+        "user": None,
+    }
+
+    ######## End of settings common to LMS and CMS
+
+    ######## Common LMS settings
+    LOGIN_REDIRECT_WHITELIST = ["{{ include "cms.url" . }}"]
+
+    # Better layout of honor code/tos links during registration
+    REGISTRATION_EXTRA_FIELDS["terms_of_service"] = "hidden"
+    REGISTRATION_EXTRA_FIELDS["honor_code"] = "hidden"
+
+    # Fix media files paths
+    PROFILE_IMAGE_BACKEND["options"]["location"] = os.path.join(
+        MEDIA_ROOT, "profile-images/"
+    )
+
+    COURSE_CATALOG_VISIBILITY_PERMISSION = "see_in_catalog"
+    COURSE_ABOUT_VISIBILITY_PERMISSION = "see_about_page"
+
+    # Allow insecure oauth2 for local interaction with local containers
+    OAUTH_ENFORCE_SECURE = False
+
+    # Email settings
+    DEFAULT_EMAIL_LOGO_URL = LMS_ROOT_URL + "/theming/asset/images/logo.png"
+    BULK_EMAIL_SEND_USING_EDX_ACE = True
+    FEATURES["ENABLE_FOOTER_MOBILE_APP_LINKS"] = False
+
+    # Branding
+    MOBILE_STORE_ACE_URLS = {}
+    SOCIAL_MEDIA_FOOTER_ACE_URLS = {}
+
+    # Make it possible to hide courses by default from the studio
+    SEARCH_SKIP_SHOW_IN_CATALOG_FILTERING = False
+
+    # Caching
+    CACHES["staticfiles"] = {
+        "KEY_PREFIX": "staticfiles_lms",
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "staticfiles_lms",
+    }
+
+    # Create folders if necessary
+    for folder in [DATA_DIR, LOG_DIR, MEDIA_ROOT, STATIC_ROOT_BASE, ORA2_FILEUPLOAD_ROOT]:
+        if not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+
+    # MFE: enable API and set a low cache timeout for the settings. otherwise, weird
+    # configuration bugs occur. Also, the view is not costly at all, and it's also cached on
+    # the frontend. (5 minutes, hardcoded)
+    ENABLE_MFE_CONFIG_API = True
+    MFE_CONFIG_API_CACHE_TIMEOUT = 1
+
+    FEATURES['ENABLE_AUTHN_MICROFRONTEND'] = True
+
+    FEATURES['ENABLE_NEW_BULK_EMAIL_EXPERIENCE'] = True
+
+    LEARNER_HOME_MFE_REDIRECT_PERCENTAGE = 100
+
+    ######## End of common LMS settings
+
+    ALLOWED_HOSTS = [
+        ENV_TOKENS.get("LMS_BASE"),
+        FEATURES["PREVIEW_LMS_BASE"],
+        "{{ include "lms.fullname" . }}",
+    ]
+    CORS_ORIGIN_WHITELIST.append("https://{{ include "lms.url" . }}")
+
+    # When we cannot provide secure session/csrf cookies, we must disable samesite=none
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SESSION_COOKIE_SAMESITE = "Lax"
+
+    # CMS authentication
+    IDA_LOGOUT_URI_LIST.append("https://{{ include "cms.url" . }}/logout/")
+
+    # Required to display all courses on start page
+    SEARCH_SKIP_ENROLLMENT_START_DATE_FILTERING = True
+
+    # Dynamic config API settings
+    # https://openedx.github.io/frontend-platform/module-Config.html
+    MFE_CONFIG = {
+        "BASE_URL": "apps.{{ include "lms.url" . }}",
+        "CSRF_TOKEN_API_PATH": "/csrf/api/v1/token",
+        "CREDENTIALS_BASE_URL": "",
+        "DISCOVERY_API_BASE_URL": "",
+        "FAVICON_URL": "https://{{ include "lms.url" . }}/favicon.ico",
+        "INFO_EMAIL": "contact@example.who.int",
+        "LANGUAGE_PREFERENCE_COOKIE_NAME": "openedx-language-preference",
+        "LMS_BASE_URL": "https://{{ include "lms.url" . }}",
+        "LOGIN_URL": "https://{{ include "lms.url" . }}/login",
+        "LOGO_URL": "https://{{ include "lms.url" . }}/theming/asset/images/logo.png",
+        "LOGO_WHITE_URL": "https://{{ include "lms.url" . }}/theming/asset/images/logo.png",
+        "LOGO_TRADEMARK_URL": "https://{{ include "lms.url" . }}/theming/asset/images/logo.png",
+        "LOGOUT_URL": "https://{{ include "lms.url" . }}/logout",
+        "MARKETING_SITE_BASE_URL": "https://{{ include "lms.url" . }}",
+        "PASSWORD_RESET_SUPPORT_LINK": "mailto:contact@example.who.int",
+        "REFRESH_ACCESS_TOKEN_ENDPOINT": "https://{{ include "lms.url" . }}/login_refresh",
+        "SITE_NAME": "WHOAcademy LXP",
+        "STUDIO_BASE_URL": "https://{{ include "cms.url" . }}",
+        "USER_INFO_COOKIE_NAME": "user-info",
+        "ACCESS_TOKEN_COOKIE_NAME": "edx-jwt-cookie-header-payload",
+        "DISABLE_ENTERPRISE_LOGIN": True,
+    }
+
+    AUTHN_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/authn"
+    AUTHN_MICROFRONTEND_DOMAIN  = "apps.{{ include "lms.url" . }}/authn"
+    MFE_CONFIG["DISABLE_ENTERPRISE_LOGIN"] = True
+
+    ACCOUNT_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/account/"
+    MFE_CONFIG["ACCOUNT_SETTINGS_URL"] = ACCOUNT_MICROFRONTEND_URL
+
+    MFE_CONFIG["ENABLE_NEW_EDITOR_PAGES"] = True
+    MFE_CONFIG["ENABLE_PROGRESS_GRAPH_SETTINGS"] = True
+
+    DISCUSSIONS_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/discussions"
+    MFE_CONFIG["DISCUSSIONS_MFE_BASE_URL"] = DISCUSSIONS_MICROFRONTEND_URL
+    DISCUSSIONS_MFE_FEEDBACK_URL = None
+
+    WRITABLE_GRADEBOOK_URL = "https://apps.{{ include "lms.url" . }}/gradebook"
+
+    LEARNING_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/learning"
+    MFE_CONFIG["LEARNING_BASE_URL"] = "https://apps.{{ include "lms.url" . }}/learning"
+
+    ORA_GRADING_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/ora-grading"
+
+    PROFILE_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/profile/u/"
+    MFE_CONFIG["ACCOUNT_PROFILE_URL"] = "https://apps.{{ include "lms.url" . }}/profile"
+
+    COMMUNICATIONS_MICROFRONTEND_URL = "https://apps.{{ include "lms.url" . }}/communications"
+    MFE_CONFIG["SCHEDULE_EMAIL_SECTION"] = True
+
+    LOGIN_REDIRECT_WHITELIST.append("apps.{{ include "lms.url" . }}")
+    CORS_ORIGIN_WHITELIST.append("https://apps.{{ include "lms.url" . }}")
+    CSRF_TRUSTED_ORIGINS.append("https://apps.{{ include "lms.url" . }}")
+    {{- range .Values.openedx.env.csrf_trusted_origins }}
+    CSRF_TRUSTED_ORIGINS.append({{ . | quote }})
+    {{- end }}
+
+    LEARNER_HOME_MICROFRONTEND_URL = CMS_ROOT_URL
+
+    FILE_UPLOAD_PERMISSIONS = None
+    LOGOUT_URL = "https://{{ include "lms.url" . }}/logout"
+
+    # Configuration variables added for core changes in edX, plugins & Xblocks
+
+    AUTHENTICATION_BACKENDS.append('common.djangoapps.third_party_auth.keycloak.KeycloakOAuth2')
+
+    ANALYTICS_DASHBOARD_URL = "{{ .Values.openedx.env.analytics_dashboard_url }}"
+
+    # Custom Keycloak OAuth Backend configuration
+    AUTHORIZATION_URL = "{{ .Values.openedx.env.keycloak.authorization_url }}"
+    ACCESS_TOKEN_URL = "{{ .Values.openedx.env.keycloak.access_token_url }}"
+    USER_DETAILS_URL = "{{ .Values.openedx.env.keycloak.user_details_url }}"
+    SSO_LOGOUT_URL = "{{ .Values.openedx.env.keycloak.logout_url }}"
+    KEYCLOAK_BASE_URL = "{{ .Values.openedx.env.keycloak.base_url }}"
+    KEYCLOAK_PUBLIC_KEY = "{{ .Values.openedx.env.keycloak.public_key }}"
+    KEYCLOAK_MASTER_REALM_CLIENT_ID = "{{ .Values.openedx.env.keycloak.realm.master.client_id }}"
+    KEYCLOAK_MASTER_REALM_CLIENT_SECRET = "{{ .Values.openedx.env.keycloak.realm.master.client_secret }}"
+
+    # Badgr configuration for enabling Open Badges
+    BADGR_BASE_URL = "{{ .Values.openedx.env.badgr.base_url }}"
+    BADGR_API_TOKEN = "{{ .Values.openedx.env.badgr.api_token }}"
+    BADGR_ISSUER_SLUG = "{{ .Values.openedx.env.badgr.issuer_slug }}"
+
+    USER_FEEDBACK_URL = "{{ .Values.openedx.env.user_feedback_url }}"
+
+    LEARNING_SPACES = [
+    {{- range $index, $element := .Values.openedx.env.learning_spaces }}
+        {{ $element| toJson }},
+    {{- end }}
+    ]
+    LEARNING_SPACES_FRONTEND_URL = "{{ .Values.openedx.env.learning_spaces_frontend_url }}"
+
+    FACE_TO_FACE_FRONTEND_URL = "{{ .Values.openedx.env.face_to_face_frontend_url }}"
+
+    LEARNING_EXPERIENCE_PLATFORM_URL = "{{ .Values.openedx.env.learning_experience_platform_frontend_url }}"
+
+    DIGITAL_CREDENTIALS_URL = "{{ .Values.openedx.env.openedx_extension.route_url }}"
+    OPENEDX_EXTENSION_URL = "{{ .Values.openedx.env.openedx_extension.service_url }}"
+
+    KEYCLOAK_PROXY_SERVICE = "{{ .Values.openedx.env.keycloak_openedx_proxy_url }}"
+
+    LEARNING_DELIVERY_API_URL = "{{ .Values.openedx.env.learning_delivery_api_url }}"
+    ANTI_CORRUPTION_LAYER_DOMAIN = "{{ .Values.openedx.env.learning_delivery_api_url }}"
+
+    API_GATEWAY_URL = "{{ .Values.openedx.env.api_gateway_url }}"
+
+    LRS_ENDPOINT = "{{ .Values.openedx.env.lrs.endpoint }}"
+    LRS_AUTH = "{{ .Values.openedx.env.lrs.auth }}"
+
+    UNITY_XBLOCK_AZURE_CONNECTION_STRING = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_connection_string }}"
+    UNITY_XBLOCK_AZURE_ACCOUNT_NAME = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_account_name }}"
+    UNITY_XBLOCK_AZURE_ACCOUNT_KEY = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_account_key }}"
+    UNITY_XBLOCK_AZURE_CONTAINER = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_container }}"
+    UNITY_XBLOCK_AZURE_LOCATION = "{{ .Values.openedx.env.unity_xblock.unity_xblock_azure_location }}"
+    ENABLE_UNITY_XBLOCK_AZURE_STORAGE = "{{ .Values.openedx.env.unity_xblock.enable_unity_xblock_azure_storage }}"
+    UNITY_XAPI_ENDPOINT = "{{ .Values.openedx.env.unity_xblock.unity_xapi_endpoint }}"
+    UNITY_LRS_KEY = "{{ .Values.openedx.env.unity_xblock.unity_lrs_key }}"
+    UNITY_LRS_SECRET = "{{ .Values.openedx.env.unity_xblock.unity_lrs_secret }}"
+
+    FERNET_SECRET_KEY = "{{ .Values.openedx.env.fernet_secret_key }}"
+
+    AZURE_LOGGING_ENV = "{{ .Values.openedx.env.logging.env }}"
+    AZURE_ACCOUNT_NAME = "{{ .Values.openedx.env.logging.azure_account_name }}"
+    AZURE_ACCOUNT_KEY = "{{ .Values.openedx.env.logging.azure_account_key }}"
+    AZURE_LOGGING_INTERVAL = "{{ .Values.openedx.env.logging.interval }}"
+
+    PLAYER_ENDPOINT = "{{ .Values.openedx.env.cmi5.player.endpoint }}"
+    PLAYER_AUTH = "{{ .Values.openedx.env.cmi5.player.auth }}"
+    PLAYER_TENANT_CODE = "{{ .Values.openedx.env.cmi5.player.tenant_code }}"
+
+    AUTHENTICATION_BACKENDS.append('common.djangoapps.third_party_auth.keycloak.KeycloakOAuth2')
+
+    INSTALLED_APPS.append('cmi5')
+
+    FILE_UPLOAD_HANDLERS = ('clamav_upload.handlers.ClamAVFileUploadHandler',)
+
+    CLAMAV_UPLOAD = {
+        "CLAMD_TCP_ADDR": "{{ .Release.Name }}-clamav",
+        "CLAMD_TCP_SOCKET": 3310
+    }
+
+    LAP_WHOA_DASHBOARD_LINK = "{{ .Values.openedx.env.lap.whoa_dashboard_link }}"
+    LAP_IARC_DASHBOARD_LINK = "{{ .Values.openedx.env.lap.iarc_dashboard_link }}"
+    LAP_COMMON_DASHBOARD_WITH_COURSE_NAME_FILTER_LINK = '{{ .Values.openedx.env.lap.common_dashboard_with_course_name_filter_link }}'
+
+    OPENEDX_EXTENSION_FRONTEND_URL = "{{ .Values.openedx.env.openedx_extension_frontend_url }}"
+    OPENEDX_EXTENSION_API_BASE_URL = "{{ .Values.openedx.env.openedx_extension_api_url }}"
+    TAGS_CACHE_TIMEOUT = "{{ .Values.openedx.env.tags_config.cache_timeout }}"
+    
+    # check DEFAULT_THROTTLE_RATES is exists with walrus operator (:=) shorthand, then update the REST_FRAMEWORK settings
+    if DEFAULT_THROTTLE_RATES := plugin_app_settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES'):
+        REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'].update(DEFAULT_THROTTLE_RATES)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openedx.fullname" . }}-config
+  labels:
+    {{- include "openedx.selectorLabels" . | nindent 4 }}
+data:
+  cms.env.yml: |
+    SITE_NAME: "{{ include "cms.url" . }}"
+    BOOK_URL: ""
+    LOG_DIR: "/openedx/data/logs"
+    LOGGING_ENV: "sandbox"
+    OAUTH_OIDC_ISSUER: "https://{{ include "lms.url" . }}/oauth2"
+    PLATFORM_NAME: "WHOAcademy LXP"
+    FEATURES:
+      CERTIFICATES_HTML_VIEW: true
+      PREVIEW_LMS_BASE: "preview.{{ include "lms.url" . }}"
+      ENABLE_COURSEWARE_INDEX: true
+      ENABLE_CSMH_EXTENDED: false
+      ENABLE_LEARNER_RECORDS: false
+      ENABLE_LIBRARY_INDEX: true
+      MILESTONES_APP: true
+      ENABLE_PREREQUISITE_COURSES: true
+    LMS_ROOT_URL: "https://{{ include "lms.url" . }}"
+    CMS_ROOT_URL: "https://{{ include "cms.url" . }}"
+    CMS_BASE: "{{ include "cms.url" . }}"
+    LMS_BASE: "{{ include "lms.url" . }}"
+    CONTACT_EMAIL: "contact@example.who.int"
+    {{- include "celery.broker.configuration" . | indent 4 }}
+    ALTERNATE_WORKER_QUEUES: "lms"
+    ENABLE_COMPREHENSIVE_THEMING: true
+    COMPREHENSIVE_THEME_DIRS: ["/openedx/themes"]
+    STATIC_ROOT_BASE: "/openedx/staticfiles"
+    EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST: "{{ .Values.openedx.smtp.host }}"
+    EMAIL_PORT: "{{ .Values.openedx.smtp.port }}"
+    EMAIL_USE_TLS: "{{ .Values.openedx.smtp.use_tls }}"
+    EMAIL_HOST_USER: "{{ .Values.openedx.smtp.user }}"
+    EMAIL_HOST_PASSWORD: "{{ .Values.openedx.smtp.password }}"
+    HTTPS: "on"
+    LANGUAGE_CODE: "en"
+    SESSION_COOKIE_DOMAIN: "{{ include "cms.url" . }}"
+    DEFAULT_SITE_THEME: "WHO_THEME"
+    SECRET_KEY: "{{ .Values.openedx.env.secret_key }}"
+    AWS_ACCESS_KEY_ID: ""
+    AWS_SECRET_ACCESS_KEY: ""
+    DOC_STORE_CONFIG: null
+
+    XQUEUE_INTERFACE:
+      django_auth: null
+      url: null
+    DATABASES:
+      default:
+        {{- include "mysql.django.connection" . | indent 8 }}
+
+  lms.env.yml: |
+    SITE_NAME: "{{ include "lms.url" . }}"
+    BOOK_URL: ""
+    LOG_DIR: "/openedx/data/logs"
+    LOGGING_ENV: "sandbox"
+    OAUTH_OIDC_ISSUER: "https://{{ include "lms.url" . }}/oauth2"
+    PLATFORM_NAME: "WHOAcademy LXP"
+    FEATURES:
+      CERTIFICATES_HTML_VIEW: true
+      PREVIEW_LMS_BASE: "preview.{{ include "lms.url" . }}"
+      ENABLE_COURSE_DISCOVERY: true
+      ENABLE_COURSEWARE_SEARCH: true
+      ENABLE_CSMH_EXTENDED: false
+      ENABLE_DASHBOARD_SEARCH:  true
+      ENABLE_COMBINED_LOGIN_REGISTRATION: true
+      ENABLE_GRADE_DOWNLOADS: true
+      ENABLE_LEARNER_RECORDS: false
+      ENABLE_MOBILE_REST_API: true
+      ENABLE_OAUTH2_PROVIDER: true
+      ENABLE_PREREQUISITE_COURSES: true
+      ENABLE_THIRD_PARTY_AUTH: true
+      MILESTONES_APP: true
+    LMS_ROOT_URL: "https://{{ include "lms.url" . }}"
+    CMS_ROOT_URL: "https://{{ include "cms.url" . }}"
+    CMS_BASE: "{{ include "cms.url" . }}"
+    LMS_BASE: "{{ include "lms.url" . }}"
+    CONTACT_EMAIL: "contact@example.who.int"
+    {{- include "celery.broker.configuration" . | indent 4 }}
+    ALTERNATE_WORKER_QUEUES: "cms"
+    ENABLE_COMPREHENSIVE_THEMING: true
+    COMPREHENSIVE_THEME_DIRS: ["/openedx/themes"]
+    STATIC_ROOT_BASE: "/openedx/staticfiles"
+    EMAIL_BACKEND: "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST: "{{ .Values.openedx.smtp.host }}"
+    EMAIL_PORT: "{{ .Values.openedx.smtp.port }}"
+    EMAIL_USE_TLS: "{{ .Values.openedx.smtp.use_tls }}"
+    EMAIL_HOST_USER: "{{ .Values.openedx.smtp.user }}"
+    EMAIL_HOST_PASSWORD: "{{ .Values.openedx.smtp.password }}"
+    ACE_ROUTING_KEY: "edx.lms.core.default"
+    HTTPS: "on"
+    LANGUAGE_CODE: "en"
+    SESSION_COOKIE_DOMAIN: "{{ include "lms.url" . }}"
+    DEFAULT_SITE_THEME: "WHO_THEME"
+    COMMENTS_SERVICE_URL: "http://{{ .Release.Name }}-forum:4567"
+    COMMENTS_SERVICE_KEY: "forumapikey"
+    SECRET_KEY: "{{ .Values.openedx.env.secret_key }}"
+    AWS_ACCESS_KEY_ID: ""
+    AWS_SECRET_ACCESS_KEY: ""
+    DOC_STORE_CONFIG: null
+
+    XQUEUE_INTERFACE:
+      django_auth: null
+      url: null
+    DATABASES:
+      default:
+        {{- include "mysql.django.connection" . | indent 8 }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openedx.fullname" . }}-uwsgi-config
+  labels:
+    {{- include "openedx.selectorLabels" . | nindent 4 }}
+data:
+  uwsgi.ini: |-
+    [uwsgi]
+    static-map = /static=/openedx/staticfiles/
+    static-map = /media=/openedx/media/
+    http = 0.0.0.0:8000
+    buffer-size = 8192
+    wsgi-file = $(SERVICE_VARIANT)/wsgi.py
+    processes = $(UWSGI_WORKERS)
+    thunder-lock = true
+    single-interpreter = true
+    enable-threads = true

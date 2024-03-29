@@ -1,0 +1,322 @@
+---
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  name: {{ include "cms.fullname" . }}
+  labels:
+    {{- include "cms.labels" . | nindent 4 }}
+spec:
+  revisionHistoryLimit: 5
+  replicas: {{ .Values.openedx.replicas }}
+  selector:
+    {{- include "cms.selectorLabels" . | nindent 6 }}
+  strategy:
+    activeDeadlineSeconds: 21600
+    rollingParams:
+      intervalSeconds: 1
+      maxSurge: 25%
+      maxUnavailable: 25%
+      timeoutSeconds: 600
+      updatePeriodSeconds: 1
+    type: Rolling
+  template:
+    metadata:
+      labels:
+        {{- include "cms.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - image: {{ include "openedx.image" . }}
+          imagePullPolicy: Always
+          name: {{ include "cms.name" . }}
+          env:
+          - name: SERVICE_VARIANT
+            value: cms
+          - name: DJANGO_SETTINGS_MODULE
+            value: cms.envs.tutor.production          
+          - name: UWSGI_WORKERS
+            value: "2"
+          - name: AZURE_CUSTOM_DOMAIN
+            value: {{ .Values.openedx.env.discussion.azure_custom_domain }}
+          - name: AZURE_LOCATION
+            value: {{ .Values.openedx.env.discussion.azure_location }}
+          - name: AZURE_CONTAINER_DISCUSSION
+            value: {{ .Values.openedx.env.discussion.azure_container_discussion }}
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /openedx/edx-platform/lms/envs/tutor/
+              name: settings-lms
+            - mountPath: /openedx/edx-platform/cms/envs/tutor/
+              name: settings-cms
+            - mountPath: /openedx/config
+              name: config
+            - mountPath: /openedx/data
+              name: data
+            - mountPath: /openedx/data/logs
+              name: data-logs
+            - mountPath: /openedx/media/
+              name: media
+            - mountPath: /openedx/edx-platform/uwsgi.ini
+              name: uwsgi-config
+              subPath: uwsgi.ini
+          resources:
+            requests:
+              cpu: {{ .Values.openedx.hpa.cpuTarget }}
+              memory: {{ .Values.openedx.hpa.memTarget }}
+            limits:
+              cpu: {{ .Values.openedx.hpa.cpuLimit }}
+              memory: {{ .Values.openedx.hpa.memLimit }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /heartbeat
+              port: 8000
+              scheme: HTTP
+              httpHeaders: # to override django allowed_hosts
+              {{- if .Values.route.custom_host.enabled }}
+                - name: Host
+                  value: "{{ .Values.route.custom_host.cms.name }}"
+              {{- else }}
+                - name: Host
+                  value: "{{ include "cms.url" . }}"
+              {{- end }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 3
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /heartbeat
+              port: 8000
+              scheme: HTTP
+              httpHeaders: # to override django allowed_hosts
+              {{- if .Values.route.custom_host.enabled }}
+                - name: Host
+                  value: "{{ .Values.route.custom_host.cms.name }}"
+              {{- else }}
+                - name: Host
+                  value: "{{ include "cms.url" . }}"
+              {{- end }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 3
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      volumes:
+        - name: settings-lms
+          configMap:
+            name: {{ include "openedx.fullname" . }}-settings-lms
+        - name: settings-cms
+          configMap:
+            name: {{ include "openedx.fullname" . }}-settings-cms
+        - name: config
+          configMap:
+            name: {{ include "openedx.fullname" . }}-config
+        - name: uwsgi-config
+          configMap:
+            name: {{ include "openedx.fullname" . }}-uwsgi-config
+            items:
+              - key: uwsgi.ini
+                path: uwsgi.ini
+
+      {{- if .Values.openedx.data.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "openedx.fullname" . }}-data
+      {{- else }}
+        - name: data
+          emptyDir: {}
+      {{- end }}
+
+      {{- if .Values.openedx.logs.persistence.enabled }}
+        - name: data-logs
+          persistentVolumeClaim:
+            claimName: {{ include "openedx.fullname" . }}-logs
+      {{- else }}
+        - name: data-logs
+          emptyDir: {}
+      {{- end }}
+
+      {{- if .Values.openedx.media.persistence.enabled }}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ include "openedx.fullname" . }}-media
+      {{- else }}
+        - name: media
+          emptyDir: {}
+      {{- end }}
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: { }
+      terminationGracePeriodSeconds: 30
+  triggers:
+  - type: ConfigChange
+
+
+---
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  name: {{ include "lms.fullname" . }}
+  labels:
+    {{- include "lms.labels" . | nindent 4 }}
+spec:
+  revisionHistoryLimit: 5
+  replicas: {{ .Values.openedx.replicas }}
+  selector:
+    {{- include "lms.selectorLabels" . | nindent 6 }}
+  strategy:
+    activeDeadlineSeconds: 21600
+    rollingParams:
+      intervalSeconds: 1
+      maxSurge: 25%
+      maxUnavailable: 25%
+      timeoutSeconds: 600
+      updatePeriodSeconds: 1
+    type: Rolling
+  template:
+    metadata:
+      labels:
+        {{- include "lms.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - image: {{ include "openedx.image" . }}
+          imagePullPolicy: Always
+          name: {{ include "lms.name" . }}
+          env:
+            - name: SERVICE_VARIANT
+              value: lms
+            - name: DJANGO_SETTINGS_MODULE
+              value: lms.envs.tutor.production            
+            - name: UWSGI_WORKERS
+              value: "2"
+            - name: AZURE_CUSTOM_DOMAIN
+              value: {{ .Values.openedx.env.discussion.azure_custom_domain }}
+            - name: AZURE_LOCATION
+              value: {{ .Values.openedx.env.discussion.azure_location }}
+            - name: AZURE_CONTAINER_DISCUSSION
+              value: {{ .Values.openedx.env.discussion.azure_container_discussion }}
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /openedx/edx-platform/lms/envs/tutor/
+              name: settings-lms
+            - mountPath: /openedx/edx-platform/cms/envs/tutor/
+              name: settings-cms
+            - mountPath: /openedx/config
+              name: config
+            - mountPath: /openedx/data
+              name: data
+            - mountPath: /openedx/data/logs
+              name: data-logs
+            - mountPath: /openedx/media/
+              name: media
+            - mountPath: /openedx/edx-platform/uwsgi.ini
+              name: uwsgi-config
+              subPath: uwsgi.ini
+          resources:
+            requests:
+              cpu: {{ .Values.openedx.hpa.cpuTarget }}
+              memory: {{ .Values.openedx.hpa.memTarget }}
+            limits:
+              cpu: {{ .Values.openedx.hpa.cpuLimit }}
+              memory: {{ .Values.openedx.hpa.memLimit }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /heartbeat
+              port: 8000
+              scheme: HTTP
+              httpHeaders: # to override django allowed_hosts
+              {{- if .Values.route.custom_host.enabled }}
+                - name: Host
+                  value: "{{ .Values.route.custom_host.lms.name }}"
+              {{- else }}
+                - name: Host
+                  value: "{{ include "lms.url" . }}"
+              {{- end }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 3
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /heartbeat
+              port: 8000
+              scheme: HTTP
+              httpHeaders: # to override django allowed_hosts
+              {{- if .Values.route.custom_host.enabled }}
+                - name: Host
+                  value: "{{ .Values.route.custom_host.lms.name }}"
+              {{- else }}
+                - name: Host
+                  value: "{{ include "lms.url" . }}"
+              {{- end }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 3
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      volumes:
+        - name: settings-lms
+          configMap:
+            name: {{ include "openedx.fullname" . }}-settings-lms
+        - name: settings-cms
+          configMap:
+            name: {{ include "openedx.fullname" . }}-settings-cms
+        - name: config
+          configMap:
+            name: {{ include "openedx.fullname" . }}-config
+        - name: uwsgi-config
+          configMap:
+            name: {{ include "openedx.fullname" . }}-uwsgi-config
+            items:
+            - key: uwsgi.ini
+              path: uwsgi.ini
+
+      {{- if .Values.openedx.data.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "openedx.fullname" . }}-data
+      {{- else }}
+        - name: data
+          emptyDir: {}
+      {{- end }}
+
+      {{- if .Values.openedx.logs.persistence.enabled }}
+        - name: data-logs
+          persistentVolumeClaim:
+            claimName: {{ include "openedx.fullname" . }}-logs
+      {{- else }}
+        - name: data-logs
+          emptyDir: {}
+      {{- end }}
+
+      {{- if .Values.openedx.media.persistence.enabled }}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ include "openedx.fullname" . }}-media
+      {{- else }}
+        - name: media
+          emptyDir: {}
+      {{- end }}
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: { }
+      terminationGracePeriodSeconds: 30
+  triggers:
+  - type: ConfigChange

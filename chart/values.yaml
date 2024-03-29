@@ -1,0 +1,156 @@
+route:
+  # enable https and auto redirect http to https
+  https_redirect: true
+  # configure the custom host name; by default openshift will assign a host name
+  # if it is a private cluster it will assign the private route, else the public route
+  custom_host:
+    enabled: true
+    cms:
+      name: bits-pilani-cms.lxp.academy.who.int
+    lms:
+      name: bits-pilani-lms.lxp.academy.who.int
+    apps:
+      name: apps.bits-pilani-lms.lxp.academy.who.int
+    preview:
+      name: preview.bits-pilani-lms.lxp.academy.who.int
+
+# set this to false when using `helm upgrade` manually
+jobs:
+  enabled: true
+
+caddy:
+  letsencrypt:
+    # possible values are `dev` and `prod`
+    # use `dev` for `labs-dev` and `prod` for everything else.
+    # https://letsencrypt.org/docs/staging-environment/
+    env: prod
+  persistence:
+    # Enable persistence using a PersistentVolumeClaim. If false, use emptyDir
+    enabled: true
+    # Persistent volume size
+    size: 1Gi
+
+  image:
+    repository: docker.io
+    name: caddy
+    tag: 2.7.4
+
+elasticsearch:
+  # We intend to use Azure managed services for DEV, UAT & Staging.
+  # For development branches, we intend to use in-cluster pods.
+  use_incluster_service: true
+
+  incluster:
+    persistence:
+      enabled: true
+      size: 2Gi
+    image:
+      repository: docker.io
+      name: elasticsearch
+      tag: 7.17.13
+
+  managed:
+    host: "{host}"
+    port: 9243
+    http_auth: ["{username}", "{password}"]
+
+mongodb:
+  # We intend to use Azure managed services for DEV, UAT & Staging.
+  # For development branches, we intend to use in-cluster pods.
+  use_incluster_service: true
+
+  incluster:
+    persistence:
+      enabled: true
+      size: 5Gi
+    image:
+      repository: docker.io
+      name: mongo
+      tag: 7.0.5
+
+  managed:
+    contentstore:
+      user: "mongodb-username-goes-here"
+      password: "mongodb-password-goes-here"
+      db: "mongodb-database-name-goes-here"
+      host: "mongodb://xxx.mongodb.net:xxx,xxx.mongodb.net:xxx,xxx.mongodb.net:xxx"
+      replicaSet: "mongodb-replicaset-goes-here"
+    forum:
+      auth: "{username}:{password}@"
+      db: "mongodb-database-name-goes-here"
+      host: "mongodb+srv://{username}:{password}@xxx.mongodb.net"
+      port: "mongodb-port-goes-here"
+      use_ssl: true
+      auth_mech: :scram
+
+redis:
+  # We intend to use Azure managed services for DEV, UAT & Staging.
+  # For development branches, we intend to use in-cluster pods.
+  use_incluster_service: true
+
+  incluster:
+    persistence:
+      enabled: true
+      size: 1Gi
+    image:
+      repository: docker.io
+      name: redis
+      tag: 7.2.1
+
+  managed:
+    host: "hostname-goes-here"
+    password: "password-goes-here"
+    port: 6379
+
+mysql:
+  # We intend to use Azure managed services for DEV, UAT & Staging.
+  # For development branches, we intend to use in-cluster pods.
+  use_incluster_service: true
+
+  incluster:
+    persistence:
+      enabled: true
+      size: 5Gi
+    image:
+      repository: docker.io
+      name: mysql
+      tag: 8.1.0
+
+    root_password: password
+    db_name: openedx
+    db_user: openedx
+    db_password: password
+
+  managed:
+    host: "host-name-goes-here"
+    db_name: "db-name-goes-here"
+    db_user: "db-user-goes-here"
+    db_password: "db-password-goes-here"
+
+forum:
+  image:
+    repository: docker.io/overhangio
+    name: openedx-forum
+    tag: 17.0.0
+
+mfe:
+  image:
+    repository: docker.io/overhangio
+    name: openedx-mfe
+    tag: 17.0.0
+
+openedx:
+  replicas: 1
+  image:
+    namespace: overhangio
+    repository: docker.io
+    name: openedx
+    tag: 17.0.0
+
+  smtp:
+    default_from_email: noreply@example.com
+    host: smtp.sendgrid.net
+    port: 587
+    user: username
+    password: password
+    use_tls: True

@@ -1,0 +1,284 @@
+{{ if .Values.caddy.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "caddy.fullname" . }}
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "caddy.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.caddy.persistence.size }}
+{{ end }}
+
+
+{{ if and .Values.elasticsearch.use_incluster_service .Values.elasticsearch.incluster.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "elasticsearch.fullname" . }}
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "elasticsearch.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.elasticsearch.incluster.persistence.size }}
+{{ end }}
+
+
+{{ if and .Values.mongodb.use_incluster_service .Values.mongodb.incluster.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mongodb.fullname" . }}
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "mongodb.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.mongodb.incluster.persistence.size }}
+{{ end }}
+
+
+{{ if and .Values.redis.use_incluster_service .Values.redis.incluster.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "redis.fullname" . }}
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.redis.incluster.persistence.size }}
+{{ end }}
+
+
+{{ if and .Values.mysql.use_incluster_service .Values.mysql.incluster.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mysql.fullname" . }}
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "mysql.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.mysql.incluster.persistence.size }}
+{{ end }}
+
+
+{{ if .Values.openedx.logs.persistence.enabled }}
+
+{{ if .Values.openedx.logs.persistence.enable_static_provisioning }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-logs
+  labels:
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  volumeName: {{ include "openedx.fullname" . }}-logs-pv
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.logs.persistence.size }}
+{{ else }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-logs
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: azure-file-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.logs.persistence.size }}
+{{ end }}
+
+{{ end }}
+
+
+{{ if .Values.openedx.data.persistence.enabled }}
+
+{{ if .Values.openedx.data.persistence.enable_static_provisioning }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-data
+  labels:
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  volumeName: {{ include "openedx.fullname" . }}-data-pv
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.data.persistence.size }}
+{{ else }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-data
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: azure-file-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.data.persistence.size }}
+{{ end }}
+
+{{ end }}
+
+
+{{ if .Values.openedx.media.persistence.enabled }}
+
+{{ if .Values.openedx.media.persistence.enable_static_provisioning }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-media
+  labels:
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  volumeName: {{ include "openedx.fullname" . }}-media-pv
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.media.persistence.size }}
+{{ else }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-media
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: azure-file-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.media.persistence.size }}
+{{ end }}
+
+{{ end }}
+
+
+{{ if .Values.openedx.modulestore.persistence.enabled }}
+
+
+{{ if .Values.openedx.modulestore.persistence.enable_static_provisioning }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-modulestore
+  labels:
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  volumeName: {{ include "openedx.fullname" . }}-modulestore-pv
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.modulestore.persistence.size }}
+{{ else }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-modulestore
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: azure-file-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.modulestore.persistence.size }}
+{{ end }}
+
+{{ end }}
+
+
+{{ if .Values.openedx.ora2.persistence.enabled }}
+
+{{ if .Values.openedx.ora2.persistence.enable_static_provisioning }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-ora2
+  labels:
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: {{ .Values.openedx.static_provisioning_settings.storage_class_name }}
+  volumeName: {{ include "openedx.fullname" . }}-ora2-pv
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.ora2.persistence.size }}
+{{ else }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openedx.fullname" . }}-ora2
+  labels:
+    app.kubernetes.io/component: volume
+    {{- include "openedx.labels" . | nindent 4 }}
+spec:
+  storageClassName: azure-file-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.openedx.ora2.persistence.size }}
+{{ end }}
+
+{{ end }}
